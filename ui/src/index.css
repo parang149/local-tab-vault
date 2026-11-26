@@ -1,0 +1,4 @@
+@import "tailwindcss";
+@import "@nuxt/ui";
+/* 지금은 항상 어둡게(html.dark). 밝은 테마는 나중에 html 클래스만 바꿔 추가한다. 색은 Nuxt UI 변수만 쓴다. */
+html, body { background: var(--ui-bg); color: var(--ui-text); }

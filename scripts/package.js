@@ -1,0 +1,11 @@
+import { cp, readFile, readdir, mkdir, rm } from 'node:fs/promises';
+import { resolve, join } from 'node:path';
+const root=resolve('extension');
+const manifest=JSON.parse(await readFile(join(root,'manifest.json'),'utf8'));
+await mkdir('dist',{recursive:true});
+const output=resolve('dist',`local-tab-vault-${manifest.version}`);
+await rm(output,{recursive:true,force:true});
+await cp(root,output,{recursive:true});
+const entries=await readdir(output);
+if(!entries.includes('manifest.json') || JSON.parse(await readFile(join(output,'manifest.json'),'utf8')).version!==manifest.version)throw Error('Folder export verification failed');
+console.log(`Exported ${entries.length} extension files to ${output}`);

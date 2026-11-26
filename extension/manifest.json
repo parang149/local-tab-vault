@@ -1,0 +1,46 @@
+{
+  "manifest_version": 2,
+  "name": "로컬 탭 보관함",
+  "version": "2.0.0",
+  "description": "브라우저 탭을 보관하고 하나씩 살펴보는 보관함. supjav 일본어 목록 수집, 선택 시 사용자가 지정한 hitomi-web 서버와 동기화.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "local-tab-vault@local.invalid",
+      "strict_min_version": "115.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    }
+  },
+  "permissions": [
+    "tabs",
+    "https://supjav.com/*"
+  ],
+  "optional_permissions": [
+    "cookies",
+    "*://*/*"
+  ],
+  "incognito": "not_allowed",
+  "background": {
+    "page": "background.html",
+    "persistent": true
+  },
+  "browser_action": {
+    "default_title": "탭 보관함 사이드패널 열기",
+    "default_icon": "icon.svg"
+  },
+  "sidebar_action": {
+    "default_title": "탭 보관함",
+    "default_panel": "ui/sidebar.html",
+    "default_icon": "icon.svg",
+    "open_at_install": false,
+    "browser_style": false
+  },
+  "options_ui": {
+    "page": "ui/manager.html",
+    "open_in_tab": true
+  },
+  "content_security_policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://img.supjav.com; connect-src https://supjav.com http: https:; object-src 'none'; base-uri 'none'; form-action 'none'"
+}
