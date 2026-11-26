@@ -1,0 +1,10 @@
+Copyright (c) 2026 parang149. All rights reserved.
+
+이 저장소의 소스 코드와 문서는 저작권자의 허락 없이 사용, 복사, 수정, 배포할 수 없습니다.
+열람은 GitHub 이용약관이 허용하는 범위에서만 가능합니다.
+
+No permission is granted to use, copy, modify, or distribute this software
+or its documentation without the prior written permission of the copyright holder.
+
+이 소프트웨어가 사용하는 외부 라이브러리(Vue, Nuxt UI, Reka UI, Tailwind CSS, Lucide 등)는
+각 라이브러리의 라이선스를 따릅니다.

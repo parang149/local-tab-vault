@@ -56,3 +56,7 @@ npm test        # 동작 테스트 + 화면 테스트
 - `ui/`: 사이드패널과 관리 화면(Vue 3, Nuxt UI 4, Tailwind 4, Vite 다중 페이지). 빌드하면 `extension/ui/`에 들어갑니다.
 - `tests/`: 동작 테스트, `ui/tests/`: 화면 테스트(jsdom)
 - `docs/HOW-IT-WORKS.md`: 작동 방식과 변경 내역. `docs/auto-close-plan.md`: 자동 닫기 설계
+
+## 라이선스
+
+All rights reserved. 허락 없이 사용·복사·수정·배포할 수 없습니다. 자세한 내용은 `LICENSE`를 보세요.
