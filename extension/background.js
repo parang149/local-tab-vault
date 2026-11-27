@@ -2,6 +2,7 @@ import { VaultDB } from './db.js';
 import { VaultService } from './service.js';
 import { Collector, CollectorDB, currentTabLoader, listPage, postId } from './collector.js';
 import { ServerSync } from './sync.js';
+import { FcNyaa } from './fcnyaa.js';
 const collector = new Collector(new CollectorDB());
 const pages = ['ui/sidebar.html', 'ui/manager.html'].map(p => browser.runtime.getURL(p));
 const notify = message => void browser.runtime.sendMessage(message).catch(() => {});
@@ -72,6 +73,8 @@ browser.runtime.onMessage.addListener((message,sender) => {
     finally { unlock('capture'); }
   })());
   if (message?.action === 'captureCancel') { unlock('capture'); return reply(Promise.resolve({ busy })); }
+  if (message?.action === 'fcInfo') return reply(Promise.resolve(fc.info()));
+  if (message?.action === 'fcConfigure') return reply(Promise.resolve().then(() => fc.configure(message.args || {})));
   if (message?.action === 'syncInfo') return reply(sync.info());
   if (message?.action === 'syncConfigure') return reply(sync.configure(message.args || {}));
   if (message?.action === 'syncDisable') return reply(sync.disable());
@@ -80,7 +83,13 @@ browser.runtime.onMessage.addListener((message,sender) => {
 });
 const service = new VaultService(new VaultDB(), browser);
 const sync = new ServerSync(service.db, { exclusive: fn => service.run(fn), onChange: () => refreshViews(), onStatus: info => void Promise.resolve(info).then(i => notify({ type: 'vault-sync-status', ...i })), log: syncLog });
-void service.ready.then(() => sync.start()).catch(() => {});
+// 연동 준비(sync.start가 db.sync를 켬) 뒤에 품번을 채워야 바뀐 내용이 서버 대기열에 들어간다
+void service.ready.then(() => sync.start()).then(() => service.run(() => service.backfillCodes())).catch(() => {});
+// FC@nyaa: 같은 PC의 nyaa.exe와 연동 (예전 유저스크립트·AHK의 브라우저 쪽 일)
+const fc = new FcNyaa({ browser, onStatus: info => notify({ type: 'fc-status', ...info }),
+  closeDone: tabId => service.closeDone(tabId),
+  onDownloaded: tabId => service.ready.then(() => service.run(() => service.downloaded(tabId))) });
+fc.start();
 const manager = browser.runtime.getURL('ui/manager.html');
 const sidebar = browser.runtime.getURL('ui/sidebar.html');
 browser.browserAction.onClicked.addListener(tab => {
@@ -96,14 +105,17 @@ function refreshViews() {
 browser.tabs.onCreated.addListener(tab => {
   void service.ready.then(()=>service.run(()=>service.onTabCreated(tab))).then(refreshViews).catch(refreshViews);
 });
-browser.tabs.onUpdated.addListener((id,change) => {
+browser.tabs.onUpdated.addListener((id,change,tab) => {
+  void fc.onTabUpdated(id, change, tab).catch(() => {});
   service.changed(id);
   if(change.url===undefined && change.status!=='complete') return;
   void service.ready.then(()=>service.run(()=>service.onTabUpdated(id,change))).then(refreshViews).catch(refreshViews);
 });
 browser.tabs.onRemoved.addListener((id,info)=>{
+  fc.onTabRemoved(id);
   service.changed(id);
   void service.ready.then(()=>service.run(()=>service.onTabRemoved(id,info))).then(result=>{
+    if(result.finished) void browser.runtime.sendMessage({type:'local-tab-vault-sync',enabled:false,finished:true}).catch(()=>{});
     if(result.changed || result.closeFailed) void browser.runtime.sendMessage({type:'local-tab-vault-updated',...result}).catch(()=>{});
     refreshViews();
   }).catch(refreshViews);

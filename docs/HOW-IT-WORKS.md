@@ -26,6 +26,7 @@
 | `extension/db.js` | IndexedDB `local-tab-vault-v1`(v4). `commit()`이 항목 변경을 같은 트랜잭션에서 `outbox`에 기록 |
 | `extension/sync.js` | 서버 동기화(`ServerSync`) |
 | `extension/collector.js` | supjav 일본어 목록 읽기와 파싱, 사용자가 연 탭에서 쪽 넘기기 |
+| `extension/fcnyaa.js` | FC@nyaa 연동(`FcNyaa`): 같은 PC nyaa.exe(127.0.0.1:18232)와 SSE `/events`로 명령을 받아 품번 추출·탭 닫기/복구·supjav 영상 제어를 하고 `/extracted`·`/result`로 답함. supjav 열람 기록 `/viewed`. 설정은 백그라운드 localStorage `fc-nyaa`(이 PC 전용, 백업 제외). 계획서 `hitomi-web/fc-nyaa/docs/merge-plan.md` |
 | `extension/supjav-text.js` | 수집 결과·진행 문구(옛 화면과 새 화면이 같이 씀) |
 | `ui/src/VaultPanel.vue` | 사이드패널과 관리 화면이 같이 쓰는 보관함 화면. `layout='sidebar'`이면 모든 영역을 세로로, `'manager'`이면 위쪽 탭 5개로 나눔 |
 | `ui/` | **새 화면 소스**(Vue 3 + Nuxt UI 4.12 + Tailwind 4). 빌드하면 `extension/ui/`가 생김 |
@@ -213,3 +214,4 @@ npm test                     # 동작 테스트(tests/*.test.js) + 화면 테스
 - 1.14.0.1: 열린 탭 보관 자동 닫기(로컬 저장·검증 → 확인창(설정) → closeJob). 서버에는 flush로 바로 올리지만 기다리지 않음, 반영 결과는 sync-log에 기록(관리 화면 연동 탭에서 보기). 수집과 탭 보관은 background busy 잠금으로 동시 실행 불가. 저장 제외: 비 http(s), supjav 목록, 로딩 중 탭. 옛 백업 검증·닫기 N 흐름 삭제. 자세한 설계는 docs/auto-close-plan.md.
 - 1.14.0.2: 관리 화면 '정리' 버튼 — 이미 보관함(휴지통 제외)에 있는 열린 탭만 DB 재확인 후 닫음. 새 저장 없음. 닫기 규칙은 열린 탭 보관과 공통(closeSources).
 - 1.14.0.3: 연동 켜기=서버 모드, 끄기=로컬 모드. 로컬 모드도 변경을 outbox에 기록(서버 주소를 한 번 넣은 뒤부터)하고, 다시 켜면 그 변경을 먼저 올린 뒤 서버 변경을 받음. 배지 '로컬 모드 · n'.
+| 2.1.0.1 | 2026-11-27 | **FC@nyaa 연동** (`fcnyaa.js`, 유저스크립트 FC2 Player Controller 대체). manifest `sessions` 권한, 관리 화면 연동 탭에 FC@nyaa 칸. nyaa 0.9.3-test1과 함께 시험 전 |

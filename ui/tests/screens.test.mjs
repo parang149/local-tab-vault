@@ -95,7 +95,9 @@ test('sidebar: count, work switch, supjav range and capture send the same messag
   assert.match(document.querySelector('h1').textContent, /미완료 2,000개/)
   assert.ok(document.querySelector('input[type=number]'), 'supjav 최대 쪽 수 칸이 사이드패널에 보여야 함')
   const sw = document.querySelector('[role=switch]'); sw.checked = true; sw.dispatchEvent(new Event('change')); await settle()
-  assert.deepEqual(b.calls.find(c => c.action === 'setAutoSync').args, { enabled: true })
+  assert.equal(b.calls.find(c => c.action === 'setAutoSync'), undefined) // 먼저 작업 종류를 고른다
+  ;[...document.querySelectorAll('[role=dialog] button')].find(x => x.textContent.includes('탭 작업')).click(); await settle()
+  assert.deepEqual(b.calls.find(c => c.action === 'setAutoSync').args, { enabled: true, mode: 'tab' })
   button('열린 탭 보관').click(); await settle()
   assert.deepEqual(b.calls.find(c => c.action === 'captureStart').args, { scope: 'current', windowId: 42, dedupe: true })
   assert.equal(b.calls.some(c => c.action === 'captureClose'), false, '확인창 전에는 닫지 않음')

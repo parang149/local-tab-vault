@@ -21,13 +21,15 @@ const busy = ref(false)
 const windowId = ref<number>()
 const result = ref<ListResult | null>(null)
 const page = ref(1)
-const view = ref<'active' | 'done' | 'all' | 'trash'>('active')
+const view = ref<'active' | 'reviewing' | 'done' | 'all' | 'trash'>('active')
 const sort = ref('newest')
 const source = ref('all')
 const search = ref('')
 const selecting = ref(false)
 const selected = ref(new Set<string>())
 const autoSync = ref(false)
+const workMode = ref<'tab' | 'vault'>('tab')
+const modePick = ref(false)
 const sync = ref<SyncInfo | null>(null)
 
 function say(title: string, error = false) { toast.add({ title, color: error ? 'error' : 'primary', icon: error ? 'i-lucide-circle-alert' : 'i-lucide-circle-check' }) }
@@ -48,7 +50,7 @@ const remaining = computed(() => result.value ? result.value.counts.unread + res
 const tabs = computed(() => {
   const c = result.value?.counts
   return [
-    { label: '미완료', value: 'active' }, { label: `완료${c ? ` ${c.done}` : ''}`, value: 'done' },
+    { label: '미완료', value: 'active' }, { label: `확인 중${c?.reviewing ? ` ${c.reviewing}` : ''}`, value: 'reviewing' }, { label: `완료${c ? ` ${c.done}` : ''}`, value: 'done' },
     { label: '전체', value: 'all' }, { label: `휴지통${c?.trash ? ` ${c.trash}` : ''}`, value: 'trash' },
   ]
 })
@@ -81,13 +83,25 @@ async function itemAction(action: string, item: VaultItem) {
 }
 type Row = ListResult['items'][number]
 const info = reactive<{ open: boolean; item: Row | null }>({ open: false, item: null })
-const showDetail = (item: Row) => Object.assign(info, { open: true, item })
+const codeInput = ref('')
+const showDetail = (item: Row) => { codeInput.value = (item as any).codeManual || ''; Object.assign(info, { open: true, item }) }
+// 품번 직접 입력: 비우면 제목에서 자동 계산 (code.js 규칙)
+const saveCode = () => { const i = info.item; if (!i) return; void rpc('mutate', { ids: [i.id], action: 'code', note: codeInput.value }).then(() => { say(codeInput.value.trim() ? '품번을 직접 지정했습니다.' : '품번을 자동 계산으로 되돌렸습니다.'); info.open = false; refreshSoon() }, e => say(e.message, true)) }
 const when = (t: number | null | undefined) => t ? new Date(t).toLocaleString('ko-KR', { hour12: false }) : ''
+// nyaa 기록 요약(서버가 계산): 열람·검색·다운로드 횟수와 마지막 시각, 저장 경로
+const isoWhen = (t?: string | null) => t ? new Date(t).toLocaleString('ko-KR', { hour12: false }) : ''
+function nyaaRows(n: any): string[][] {
+  if (!n) return []
+  const row = (label: string, s: any) => s?.count ? [label, `${s.count}회 · 마지막 ${isoWhen(s.last)}`] : [label, '']
+  const d = n.downloaded
+  return [row('nyaa 열람', n.viewed), row('nyaa 검색', n.searched), row('nyaa 다운로드', d), ['저장 경로', d?.savepath || '']]
+}
 const detailRows = computed(() => {
   const i = info.item
   if (!i) return []
   return [['상태', i.deletedAt !== null ? '휴지통' : STATUS[i.status]], ['수집 날짜', when(i.createdAt)], ['포스트 날짜', i.supjav?.date || ''],
-    ['완료 날짜', when(i.completedAt)], ['마지막 확인', when(i.lastViewedAt)], ['휴지통 이동', when(i.deletedAt)], ['태그', i.tags.join(', ')], ['메모', i.note]].filter(r => r[1])
+    ['완료 날짜', when(i.completedAt)], ['마지막 확인', when(i.lastViewedAt)], ['휴지통 이동', when(i.deletedAt)], ['태그', i.tags.join(', ')], ['메모', i.note],
+    ['다른 주소', ((i as any).urls || []).filter((u: string) => u !== i.url).join(', ')], ...nyaaRows((i as any).nyaa)].filter(r => r[1])
 })
 const gridView = ref(wide && localStorage.getItem('manager-layout') === 'grid')
 watch(gridView, v => localStorage.setItem('manager-layout', v ? 'grid' : 'list'))
@@ -225,10 +239,13 @@ async function containerPermission() {
 }
 
 // ── 작업 시작 ──
-function setAutoSync(on: boolean) {
+// 켤 때는 작업 종류를 고른다: 탭 작업(지금 그대로) / 보관함 작업(정렬 순서대로 열고 nyaa 다운로드·탭 닫기 단축키로 완료)
+function setAutoSync(on: boolean, mode?: 'tab' | 'vault') {
+  if (on && !mode) { modePick.value = true; return }
+  modePick.value = false
   void task(async () => {
-    const state = await rpc<{ enabled: boolean }>('setAutoSync', { enabled: on }); autoSync.value = state.enabled
-    say(state.enabled ? '작업 시작. 하나를 닫으면 같은 URL 탭도 함께 닫고 완료 후 다음 항목 하나를 엽니다.' : '작업 중지. 탭 닫힘에 반응하지 않습니다.')
+    const state = await rpc<{ enabled: boolean; mode: 'tab' | 'vault' }>('setAutoSync', { enabled: on, mode }); autoSync.value = state.enabled; workMode.value = state.mode
+    say(!state.enabled ? '작업 중지. 탭 닫힘에 반응하지 않습니다.' : state.mode === 'vault' ? '보관함 작업 시작. 슬롯 단축키로 받거나 탭 닫기 단축키로 닫으면 완료, 그냥 닫으면 미완료로 두고 다음 항목을 엽니다.' : '탭 작업 시작. 하나를 닫으면 같은 URL 탭도 함께 닫고 완료 후 다음 항목 하나를 엽니다.')
   })
 }
 
@@ -255,6 +272,8 @@ const SYNC: Record<string, { label: string; color: string }> = {
 
 // ── 서버 연동 설정(관리 화면 연동 탭) ──
 const server = reactive({ url: '', name: '' })
+// nyaa 설정 창과 같은 모양: 서버 + 토큰 끝 3자리
+const vaultLabel = (url: string) => { const m = /^(.*)\/api\/vault\/([0-9a-f]{64})\/?$/i.exec(url.trim()); return m ? `${m[1]} · 토큰 …${m[2].slice(-3).toLowerCase()}` : '주소 모양이 올바르지 않음' }
 const SYNC_TEXT: Record<string, string> = { off: '로컬 모드 · 이 PC 보관함만 사용(바뀐 내용은 연동을 켜면 먼저 서버에 올라감)', connecting: '연결 중…', connected: '연결됨 · 실시간 동기화 중', offline: '서버에 연결되지 않음 · 다시 연결 중', unauthorized: '주소(토큰)가 맞지 않아 멈춤' }
 const syncText = computed(() => { const i: any = sync.value; if (!i) return '확인 중…'; return `${i.status === 'off' ? '' : '서버 모드 · '}${SYNC_TEXT[i.status] || i.status}${i.enabled && i.address ? ` · ${i.address}` : ''}${i.name ? ` · ${i.name}` : ''}${i.pending ? ` · 서버 미반영 ${i.pending}개` : ''}${i.lastSync ? ` · 마지막 동기화 ${new Date(i.lastSync).toLocaleTimeString('ko-KR')}` : ''}${i.error && i.status !== 'connected' ? ` · ${i.error}` : ''}` })
 async function connectServer() {
@@ -272,11 +291,31 @@ const resyncServer = () => void rpc('syncResync').then(i => { sync.value = i; sa
 const disableServer = () => void rpc('syncDisable').then(i => { sync.value = i; say('연동을 껐습니다. 이 PC 단독 보관함으로 동작합니다.') }, e => say(e.message, true))
 watch(sync, i => { if ((i as any)?.name && !server.name) server.name = (i as any).name })
 
+// ── FC@nyaa 연동(같은 PC의 nyaa.exe) ──
+type FcInfo = { enabled: boolean; url: string; status: 'off' | 'connecting' | 'connected' | 'offline'; error: string; version: string; log: { at: number; text: string; ok: boolean }[] }
+const fc = ref<FcInfo | null>(null)
+const fcUrl = ref('')
+const FC_TEXT: Record<string, string> = { off: '꺼짐', connecting: '연결 중…', connected: '연결됨', offline: 'nyaa.exe에 연결되지 않음 · 다시 연결 중' }
+const fcText = computed(() => { const i = fc.value; if (!i) return '확인 중…'; return `${FC_TEXT[i.status] || i.status}${i.status === 'connected' && i.version ? ` · nyaa v${i.version}` : ''} · ${i.url}` })
+const fcMedia = ref(false)
+async function loadFc() {
+  fc.value = await rpc<FcInfo>('fcInfo').catch(() => null)
+  if (fc.value && !fcUrl.value) fcUrl.value = fc.value.url
+  try { fcMedia.value = !!await ext.permissions.contains({ origins: ['*://*/*'] }) } catch { fcMedia.value = false }
+}
+const configureFc = (enabled: boolean) => void rpc<FcInfo>('fcConfigure', { enabled, url: fcUrl.value.trim() }).then(i => { fc.value = i; say(enabled ? 'FC@nyaa 연동을 켰습니다.' : 'FC@nyaa 연동을 껐습니다.') }, e => say(e.message, true))
+async function allowFcMedia() {
+  // 사용자 클릭 직후 호출해야 한다. supjav 플레이어 iframe(다른 도메인)의 영상을 제어하려면 필요.
+  try { fcMedia.value = !!await ext.permissions.request({ origins: ['*://*/*'] }); say(fcMedia.value ? '영상 제어 권한을 허용했습니다.' : '권한을 허용하지 않았습니다. 영상 재생/정지가 플레이어 안에서는 동작하지 않을 수 있습니다.', !fcMedia.value) }
+  catch (e) { say(e instanceof Error ? e.message : String(e), true) }
+}
+
 function onMessage(m: any) {
-  if (m?.type === 'local-tab-vault-sync') autoSync.value = m.enabled
+  if (m?.type === 'local-tab-vault-sync') { autoSync.value = m.enabled; if (m.finished) say('보관함 작업 끝. 남은 미완료 항목이 없습니다.') }
   if (m?.type === 'local-tab-vault-live') refreshSoon()
   if (m?.type === 'local-tab-vault-updated') { say(m.closeFailed ? '중복 탭 닫기 실패 또는 탭 변경: 완료 및 다음 항목 열기를 중단했습니다.' : `작업 처리: ${m.changed}개 항목 완료${m.opened ? ' · 다음 항목을 열었습니다.' : m.nextFailed ? ' · 다음 항목 자동 열기에 실패했습니다.' : ''}`, !!m.closeFailed); refreshSoon() }
   if (m?.type === 'vault-sync-status') sync.value = m
+  if (m?.type === 'fc-status') { const { type: _t, ...rest } = m; fc.value = rest }
   if (m?.type === 'vault-busy') vaultBusy.value = m.busy
   if (m?.type === 'supjav-progress') Object.assign(collect, { running: true, status: describeProgress(m), error: false })
   if (m?.type === 'supjav-challenge') Object.assign(collect, { status: '수집 탭에 Cloudflare 확인 화면이 떴습니다. 그 탭에서 직접 통과하면 이어서 수집합니다(최대 3분).', error: false })
@@ -288,8 +327,9 @@ onMounted(() => {
   void rpc<{ busy: null | 'collect' | 'capture' }>('busyState').then(r => { vaultBusy.value = r.busy }).catch(() => {})
   void task(async () => {
     windowId.value = (await ext.windows.getCurrent()).id
-    autoSync.value = (await rpc<{ enabled: boolean }>('autoSyncState')).enabled
+    { const st = await rpc<{ enabled: boolean; mode: 'tab' | 'vault' }>('autoSyncState'); autoSync.value = st.enabled; workMode.value = st.mode }
     sync.value = await rpc<SyncInfo>('syncInfo').catch(() => null)
+    void loadFc().catch(() => {})
     const last = await rpc<{ last: unknown; running: boolean }>('supjavList').catch(() => null)
     if (last) { collect.running = last.running; if (last.last) collect.status = '마지막 수집: ' + describeRun(last.last) }
     await reload()
@@ -313,7 +353,15 @@ onBeforeUnmount(() => { ext.runtime.onMessage.removeListener(onMessage); changes
       </header>
 
       <div class="flex items-center justify-between gap-2 rounded-lg bg-elevated px-3 py-2">
-        <USwitch :model-value="autoSync" :disabled="busy" label="작업 시작" :description="!wide ? undefined : autoSync ? '켜짐 · 중복 탭 함께 닫고 다음 항목 열기' : '꺼짐 · 탭 닫힘에 반응하지 않음'" @update:model-value="setAutoSync" />
+        <USwitch :model-value="autoSync" :disabled="busy" :label="autoSync ? (workMode === 'vault' ? '보관함 작업 중' : '탭 작업 중') : '작업 시작'" :description="!wide ? undefined : !autoSync ? '꺼짐 · 탭 닫힘에 반응하지 않음' : workMode === 'vault' ? '받거나 탭 닫기 단축키 → 완료, 그냥 닫기 → 미완료 · 다음 항목 열기' : '켜짐 · 중복 탭 함께 닫고 다음 항목 열기'" @update:model-value="(v: boolean) => setAutoSync(v)" />
+        <UModal v-model:open="modePick" title="작업 시작" description="어떤 작업을 할까요?">
+          <template #body>
+            <div class="flex flex-col gap-2">
+              <UButton block size="lg" variant="soft" icon="i-lucide-panels-top-left" @click="setAutoSync(true, 'tab')">탭 작업 · 지금 열린 탭 기준</UButton>
+              <UButton block size="lg" icon="i-lucide-archive" @click="setAutoSync(true, 'vault')">보관함 작업 · 정렬 순서대로 하나씩 열기</UButton>
+            </div>
+          </template>
+        </UModal>
       </div>
 
       <UTabs v-if="wide" v-model="section" :items="SECTIONS" :content="false" class="w-full" />
@@ -353,7 +401,7 @@ onBeforeUnmount(() => { ext.runtime.onMessage.removeListener(onMessage); changes
       <UTabs v-model="view" :items="tabs" :content="false" size="md" class="w-full" />
       <div class="flex gap-1.5">
         <UInput v-model="search" size="md" icon="i-lucide-search" placeholder="제목, URL, 메모 검색" class="min-w-0 flex-1" :maxlength="500" />
-        <USelect v-model="source" size="md" :items="[{ label: '전체', value: 'all' }, { label: 'supjav', value: 'supjav' }]" class="w-24" aria-label="출처" />
+        <USelect v-model="source" size="md" :items="[{ label: '전체', value: 'all' }, { label: 'supjav', value: 'supjav' }, { label: '품번 없음', value: 'nocode' }, { label: 'nyaa 기록만', value: 'record' }]" class="w-32" aria-label="출처" />
         <USelect v-model="sort" size="md" :items="SORTS" class="w-28" aria-label="정렬" />
         <UButton size="md" color="neutral" variant="soft" icon="i-lucide-refresh-cw" aria-label="새로고침" :disabled="busy" @click="task(reload)" />
       </div>
@@ -403,7 +451,7 @@ ${item.url}`"
           <button type="button" class="min-w-0 flex-1 text-left disabled:cursor-default" :disabled="busy || item.warning || item.deletedAt !== null" :title="`${item.title}\n${item.url}`"
             @click="selecting ? toggle(item.id) : itemAction('open', item)" @auxclick="middleClick($event, item)">
             <span class="block truncate font-medium">{{ item.title || '(제목 없음)' }}</span>
-            <span class="block truncate text-xs text-muted">{{ STATUS[item.status] }} · {{ domain(item.url) }}<template v-if="item.supjav?.date"> · {{ item.supjav.date }}</template><template v-if="item.warning"> · 제한 URL</template><template v-if="item.note"> · 메모</template></span>
+            <span class="block truncate text-xs text-muted">{{ STATUS[item.status] }} · {{ domain(item.url) }}<template v-if="item.supjav?.date"> · {{ item.supjav.date }}</template><template v-if="item.warning"> · 제한 URL</template><template v-if="item.note"> · 메모</template><template v-if="(item as any).nyaa?.downloaded?.count"> · 받음</template></span>
           </button>
           <UDropdownMenu :items="menu(item)" :content="{ align: 'end' }">
             <UButton size="sm" color="neutral" variant="ghost" icon="i-lucide-ellipsis-vertical" aria-label="항목 메뉴" :disabled="busy" />
@@ -435,7 +483,7 @@ ${item.url}`"
       <section v-if="wide && section === 'sync'" class="flex flex-col gap-3 rounded-lg border border-default p-4" aria-label="hitomi-web 연동">
         <p :class="sync?.status === 'connected' ? 'text-success' : sync?.status === 'off' ? 'text-muted' : 'text-warning'" aria-live="polite">{{ syncText }}</p>
         <div class="grid gap-3 sm:grid-cols-[1fr_12rem]">
-          <UFormField label="서버 주소"><UInput v-model="server.url" type="url" placeholder="http://서버:포트/api/vault/…" spellcheck="false" autocomplete="off" class="w-full" /></UFormField>
+          <UFormField label="서버 주소" :help="(sync as any)?.address ? `저장됨 · ${(sync as any).address}` : '저장 안 됨'" :hint="server.url.trim() ? `저장하면 바뀜 · ${vaultLabel(server.url)}` : undefined"><UInput v-model="server.url" type="url" placeholder="http://서버:포트/api/vault/…" spellcheck="false" autocomplete="off" class="w-full" /></UFormField>
           <UFormField label="이 PC 이름"><UInput v-model="server.name" :maxlength="60" placeholder="예: PC A" class="w-full" /></UFormField>
         </div>
         <div class="flex flex-wrap gap-2">
@@ -456,6 +504,32 @@ ${item.url}`"
         <p class="text-sm text-muted">LibreWolf는 내부망 http 주소도 https로 바꿔 연결이 실패합니다. about:config에서 dom.security.https_only_mode.upgrade_local을 false로 바꾸세요.</p>
       </section>
 
+      <section v-if="wide && section === 'sync'" class="flex flex-col gap-3 rounded-lg border border-default p-4" aria-label="FC@nyaa 연동">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h2 class="font-semibold">FC@nyaa (nyaa.exe) 연동</h2>
+          <span :class="fc?.status === 'connected' ? 'text-success' : fc?.status === 'off' ? 'text-muted' : 'text-warning'" class="text-sm" aria-live="polite">{{ fcText }}</span>
+        </div>
+        <p class="text-sm text-muted">같은 PC에서 실행 중인 nyaa.exe와 연결합니다. nyaa의 단축키를 누르면 이 브라우저의 현재 탭에서 품번을 뽑아 보내고, 탭 닫기·복구와 supjav 영상 재생/정지를 처리합니다. supjav 페이지를 열면 열람 기록을 nyaa에 남깁니다. (예전 FC2 Player Controller 유저스크립트는 꺼 주세요.)</p>
+        <div class="grid gap-3 sm:grid-cols-[1fr_auto]">
+          <UFormField label="nyaa 주소"><UInput v-model="fcUrl" type="url" placeholder="http://127.0.0.1:18232" spellcheck="false" autocomplete="off" class="w-full" /></UFormField>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <UButton icon="i-lucide-plug" @click="configureFc(true)">연동 켜기</UButton>
+          <UButton color="neutral" variant="ghost" icon="i-lucide-unplug" @click="configureFc(false)">연동 끄기</UButton>
+          <UButton color="neutral" variant="soft" :icon="fcMedia ? 'i-lucide-check' : 'i-lucide-shield'" :disabled="fcMedia" @click="allowFcMedia">{{ fcMedia ? '영상 제어 권한 허용됨' : '영상 제어 권한 허용' }}</UButton>
+        </div>
+        <p class="text-xs text-muted">영상 제어 권한: supjav 플레이어는 다른 도메인의 iframe 안에 있어 모든 사이트 접근 권한이 있어야 재생/정지를 제어할 수 있습니다. 영상 제어에만 씁니다.</p>
+        <UCollapsible class="rounded-md border border-default" @update:open="o => o && loadFc()">
+          <UButton color="neutral" variant="ghost" size="sm" block trailing-icon="i-lucide-chevron-down" class="justify-between">최근 처리 기록(이번 실행)</UButton>
+          <template #content>
+            <ul class="max-h-64 overflow-auto px-3 pb-2 font-mono text-xs text-muted">
+              <li v-if="!fc?.log?.length">기록이 없습니다.</li>
+              <li v-for="(l, n) in fc?.log || []" :key="n" :class="l.ok ? '' : 'text-error'">{{ new Date(l.at).toLocaleTimeString('ko-KR', { hour12: false }) }} · {{ l.text }}</li>
+            </ul>
+          </template>
+        </UCollapsible>
+      </section>
+
       <p v-if="wide && show('backup')" class="text-xs text-dimmed">확장 삭제 시 이 PC 사본이 사라질 수 있습니다. 서버 연동 중이면 서버에 남습니다. JSON 백업을 보관하세요.</p>
     </div>
 
@@ -466,6 +540,12 @@ ${item.url}`"
           <a :href="info.item.url" target="_blank" rel="noreferrer noopener" class="break-all text-primary hover:underline">{{ info.item.url }}</a>
           <dl class="grid grid-cols-[6rem_1fr] gap-x-3 gap-y-1.5">
             <template v-for="r in detailRows" :key="r[0]"><dt class="text-muted">{{ r[0] }}</dt><dd class="break-words whitespace-pre-wrap">{{ r[1] }}</dd></template>
+            <dt class="text-muted">품번</dt>
+            <dd class="flex flex-wrap items-center gap-2">
+              <span class="font-mono">{{ (info.item as any).code || '(없음)' }}</span>
+              <UInput v-model="codeInput" size="xs" class="w-40" placeholder="직접 입력 (비우면 자동)" aria-label="품번 직접 입력" />
+              <UButton size="xs" color="neutral" variant="soft" @click="saveCode">적용</UButton>
+            </dd>
           </dl>
         </div>
       </template>

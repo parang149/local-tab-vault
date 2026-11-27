@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "로컬 탭 보관함",
-  "version": "2.0.0",
+  "version": "2.1.1",
   "description": "브라우저 탭을 보관하고 하나씩 살펴보는 보관함. supjav 일본어 목록 수집, 선택 시 사용자가 지정한 hitomi-web 서버와 동기화.",
   "browser_specific_settings": {
     "gecko": {
@@ -16,6 +16,7 @@
   },
   "permissions": [
     "tabs",
+    "sessions",
     "https://supjav.com/*"
   ],
   "optional_permissions": [

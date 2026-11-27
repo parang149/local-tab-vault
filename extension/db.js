@@ -1,3 +1,4 @@
+import { applyCode } from './code.js';
 export class VaultDB {
   constructor(name = 'local-tab-vault-v1') { this.name = name; }
   async open() {
@@ -35,6 +36,7 @@ export class VaultDB {
   // sync=true(서버 연동 중)이면 항목 변경을 같은 트랜잭션 안에서 outbox에 함께 기록한다.
   // opts.remote: 서버에서 받은 변경(다시 올리지 않음), opts.op='merge': 같은 URL이 서버에 있으면 서버가 건너뜀.
   async commit(changes, removals = {}, opts = {}) {
+    for (const v of changes.items || []) applyCode(v); // 품번은 저장할 때마다 제목에서 계산
     const db = await this.open();
     const record = this.sync && !opts.remote;
     let queued = false;
@@ -71,6 +73,12 @@ export class VaultDB {
   }
   pending(limit = 200) {
     return this.request(['outbox'], 'readonly', (tx, done) => { const q = tx.objectStore('outbox').getAll(null, limit); q.onsuccess = () => done(q.result); });
+  }
+  // 값이 이미 같아도 서버로 올릴 patch를 대기열에 넣는다 (품번 칸을 서버에 처음 맞출 때)
+  async queuePatches(list) {
+    if (!list.length) return;
+    await this.request(['outbox'], 'readwrite', tx => { for (const { id, fields } of list) tx.objectStore('outbox').add({ itemId: id, change: { op: 'patch', id, fields } }); });
+    this.onQueued?.();
   }
   countPending() {
     return this.request(['outbox'], 'readonly', (tx, done) => { const q = tx.objectStore('outbox').count(); q.onsuccess = () => done(q.result); });

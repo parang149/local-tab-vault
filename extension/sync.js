@@ -18,7 +18,7 @@ export class ServerSync {
   }
   serial(fn) { const run = this.tail.then(fn, fn); this.tail = run.catch(() => {}); return run; }
   setStatus(status, error = '') { this.status = status; this.error = error; this.onStatus(this.info()); }
-  async info() { return { status: this.status, error: this.error, enabled: !!this.state?.enabled, address: this.state?.url ? this.state.url.replace(/[0-9a-f]{64}$/i, m => `${m.slice(0, 6)}…`) : '', name: this.state?.name || '', pending: await this.db.countPending().catch(() => 0), lastSync: this.lastSync }; }
+  async info() { return { status: this.status, error: this.error, enabled: !!this.state?.enabled, address: this.state?.url ? vaultLabel(this.state.url) : '', name: this.state?.name || '', pending: await this.db.countPending().catch(() => 0), lastSync: this.lastSync }; }
   async saveState(patch) { this.state = { ...this.state, ...patch }; await this.db.commit({ settings: [this.state] }, {}, { remote: true }); }
   async start() {
     const { settings } = await this.db.snapshot();
@@ -140,4 +140,10 @@ export class ServerSync {
       this.setStatus('connected');
     }, e => this.failed(e));
   }
+}
+
+// 보관함 주소 표시: "http://서버:포트 · 토큰 …abc" (토큰 끝 3자리만). nyaa settings.rs vault_label과 같은 규칙
+export function vaultLabel(url = '') {
+  const m = /^(.*)\/api\/vault\/([0-9a-f]{64})\/?$/i.exec(String(url).trim());
+  return m ? `${m[1]} · 토큰 …${m[2].slice(-3).toLowerCase()}` : '주소 모양이 올바르지 않음';
 }

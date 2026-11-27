@@ -9,7 +9,7 @@ export class VaultService {
   constructor(db, api) {
     this.db = db; this.api = api; this.session = crypto.randomUUID(); this.tail = Promise.resolve();
     this.previews = new Map(); this.tidyPlans = new Map(); this.epochs = new Map();
-    this.suppressedRemovals = new Set(); this.watchedTabs = new Map(); this.syncEnabled = false; this.workflowBusy = false; this.workOrder = 'oldest'; this.ready = this.initializeSync();
+    this.suppressedRemovals = new Set(); this.watchedTabs = new Map(); this.syncEnabled = false; this.workflowBusy = false; this.workOrder = 'oldest'; this.workMode = 'tab'; this.doneRemovals = new Set(); this.skipped = new Set(); this.ready = this.initializeSync();
   }
   async initializeSync() {
     try {
@@ -24,8 +24,10 @@ export class VaultService {
     this.watchedTabs.clear();
     for (const tab of tabs) if (!tab.incognito && !this.isOwn(tab.url) && typeof tab.url === 'string') this.watchedTabs.set(tab.id,{url:tab.url,windowId:tab.windowId,incognito:false});
   }
-  async setAutoSync({ enabled }) {
+  async setAutoSync({ enabled, mode }) {
     check(typeof enabled === 'boolean', '동기화 설정이 올바르지 않습니다.');
+    if (enabled) this.workMode = mode === 'vault' ? 'vault' : 'tab';
+    this.skipped.clear(); this.doneRemovals.clear();
     await this.ready;
     if (enabled) {
       const {items}=await this.db.snapshot();
@@ -35,9 +37,28 @@ export class VaultService {
     } else { this.watchedTabs.clear(); this.workflowBusy=false; }
     await this.db.commit({settings:[{id:'auto-sync',enabled,updatedAt:Date.now()},{id:'workflow',enabled,updatedAt:Date.now()}]});
     this.syncEnabled=enabled;
-    return {enabled:this.syncEnabled,tracked:this.watchedTabs.size};
+    // 보관함 작업: 정렬 순서의 첫 미완료 항목을 연다
+    if(enabled && this.workMode==='vault') { const {items}=await this.db.snapshot(); const r=await this.openNext(items,new Set()); if(r.finished) throw new Error('작업할 미완료 항목이 없습니다.'); }
+    return {enabled:this.syncEnabled,mode:this.workMode,tracked:this.watchedTabs.size};
   }
-  async autoSyncState() { await this.ready; return {enabled:this.syncEnabled}; }
+  // 품번 칸이 없는 기존 항목을 한 번 채운다 (서버 연동 중이면 대기열로 올라감)
+  async backfillCodes() {
+    await this.ready;
+    const { items } = await this.db.snapshot();
+    const todo = items.filter(i => !Object.hasOwn(i, 'codeKey'));
+    if (todo.length) await this.db.commit({ items: todo });
+    // 서버 연동 중이면 품번 칸을 서버에 한 번 맞춘다 (예전 버전은 연동 준비 전에 채워서 대기열에 안 들어갔음)
+    let queued = 0;
+    const store = globalThis.localStorage;
+    if (this.db.sync && store && store.getItem('code-sync-v1') !== '1') {
+      const { items: all } = await this.db.snapshot();
+      const list = all.filter(i => i.codeKey).map(i => ({ id: i.id, fields: { code: i.code, codeKey: i.codeKey } }));
+      await this.db.queuePatches(list); queued = list.length;
+      store.setItem('code-sync-v1', '1');
+    }
+    return { filled: todo.length, queued };
+  }
+  async autoSyncState() { await this.ready; return {enabled:this.syncEnabled,mode:this.workMode}; }
   async themeState() { const {settings}=await this.db.snapshot(); return {settings:settings.find(s=>s.id==='theme')?.theme || 'system'}; }
   async setTheme({theme}) { check(['system','light','dark'].includes(theme),'테마 설정이 올바르지 않습니다.'); await this.db.commit({settings:[{id:'theme',theme,updatedAt:Date.now()}]}); return {theme}; }
   async onTabCreated(tab) {
@@ -50,10 +71,14 @@ export class VaultService {
   }
   async onTabRemoved(id, info={}) {
     const previous=this.watchedTabs.get(id);this.watchedTabs.delete(id);this.changed(id);
+    const doneClose=this.doneRemovals.delete(id);
     if(this.suppressedRemovals.delete(id)) return {changed:0};
     if(!this.syncEnabled || !this.workflowBusy || info.isWindowClosing || !previous || previous.incognito || this.isOwn(previous.url) || restricted(previous.url)) return {changed:0};
     const {items:archive}=await this.db.snapshot();
-    if(!archive.some(i=>i.deletedAt===null && i.status!=='done' && i.url===previous.url)) return {changed:0};
+    const current=archive.find(i=>i.deletedAt===null && i.status!=='done' && i.url===previous.url);
+    if(!current) return {changed:0};
+    // 보관함 작업: 확장이 완료로 닫은 탭(다운로드·nyaa 탭 닫기)만 완료, 그 밖의 닫기는 미완료로 두고 건너뛰어 다음 항목
+    if(this.workMode==='vault' && !doneClose) { this.skipped.add(current.id); return {changed:0,...await this.openNext(archive,new Set([current.id]),previous.windowId)}; }
     const live=await this.normalTabs();
     try {
       for(const duplicate of live.filter(t=>t.url===previous.url)) {
@@ -71,19 +96,37 @@ export class VaultService {
     const completedIds=new Set();
     for(const item of items) if(item.deletedAt===null && item.url===previous.url && ['unread','reviewing'].includes(item.status)) {item.status='done';item.updatedAt=now;item.lastViewedAt=now;item.completedAt=now;changed.push(item);completedIds.add(item.id);}
     if(changed.length) await this.db.commit({items:changed,workTabs:stateBefore.workTabs.filter(t=>t.closedAt)});
-    let opened=null, nextFailed=false;
-    if(changed.length && this.workflowBusy) {
-      const ordered=[...items].sort((a,b)=>a.createdAt-b.createdAt || a.id.localeCompare(b.id));
-      // 최신순으로 볼 때는 화면 아래쪽(더 오래 저장된 항목)으로 진행한다.
-      if(this.workOrder==='newest') ordered.reverse();
-      const completedPositions=ordered.map((i,n)=>completedIds.has(i.id)?n:-1).filter(n=>n>=0);
-      const firstIndex=Math.min(...completedPositions), lastIndex=Math.max(...completedPositions);
-      const candidates=ordered.filter(i=>i.deletedAt===null && i.status!=='done' && !restricted(i.url));
-      let next=candidates.find(i=>ordered.indexOf(i)>lastIndex);
-      if(!next) next=[...candidates].reverse().find(i=>ordered.indexOf(i)<firstIndex);
-      if(next) { this.workflowBusy=false; try { await this.openOne({id:next.id,active:true,windowId:previous.windowId,workflow:true}); opened=next.id; } catch { nextFailed=true; } finally { this.workflowBusy=this.syncEnabled; } }
-    }
-    return {changed:changed.length,opened,nextFailed};
+    const next=changed.length && this.workflowBusy ? await this.openNext(items,completedIds,previous.windowId) : {opened:null,nextFailed:false};
+    return {changed:changed.length,...next};
+  }
+  // 작업 중 다음 항목 열기: 정렬 순서에서 방금 끝낸 항목 다음(없으면 앞쪽) 미완료. 보관함 작업은 건너뛴 항목 제외, 남은 게 없으면 작업 종료
+  async openNext(items,doneIds,windowId) {
+    let opened=null, nextFailed=false, finished=false;
+    const ordered=[...items].sort((a,b)=>a.createdAt-b.createdAt || a.id.localeCompare(b.id));
+    // 최신순으로 볼 때는 화면 아래쪽(더 오래 저장된 항목)으로 진행한다.
+    if(this.workOrder==='newest') ordered.reverse();
+    const positions=ordered.map((i,n)=>doneIds.has(i.id)?n:-1).filter(n=>n>=0);
+    const firstIndex=Math.min(...positions), lastIndex=Math.max(...positions);
+    const vault=this.workMode==='vault';
+    const candidates=ordered.filter(i=>i.deletedAt===null && i.status!=='done' && !doneIds.has(i.id) && !restricted(i.url) && !(vault && (i.recordOnly || this.skipped.has(i.id))));
+    let next=candidates.find(i=>ordered.indexOf(i)>lastIndex);
+    if(!next) next=[...candidates].reverse().find(i=>ordered.indexOf(i)<firstIndex);
+    if(next) { this.workflowBusy=false; try { await this.openOne({id:next.id,active:true,windowId,workflow:true}); opened=next.id; } catch { nextFailed=true; } finally { this.workflowBusy=this.syncEnabled; } }
+    else if(vault) { await this.setAutoSync({enabled:false}); finished=true; }
+    return {opened,nextFailed,finished};
+  }
+  // nyaa: 완료로 닫기(탭 닫기 단축키·다운로드 후). 보관함 작업 중일 때만 완료 표시, 아니면 그냥 닫기(지금 동작)
+  async closeDone(tabId) {
+    if(this.syncEnabled && this.workMode==='vault') this.doneRemovals.add(tabId);
+    try { await this.api.tabs.remove(tabId); } catch(e) { this.doneRemovals.delete(tabId); throw e; }
+  }
+  // nyaa: 슬롯 단축키로 받은 탭의 다운로드가 걸림 → 보관함 작업이면 완료로 닫고 다음 항목, 아니면 아무것도 안 함
+  async downloaded(tabId) {
+    if(!(this.syncEnabled && this.workMode==='vault') || typeof tabId!=='number') return false;
+    const tab=await this.api.tabs.get(tabId).catch(()=>null);
+    if(!tab) return false;
+    await this.closeDone(tabId);
+    return true;
   }
   changed(id) { this.epochs.set(id, (this.epochs.get(id) || 0) + 1); }
   run(fn) { const p = this.tail.then(fn); this.tail = p.catch(() => {}); return p; }
@@ -298,6 +341,7 @@ export class VaultService {
       if (action === 'delete') i.deletedAt = now;
       else if (action === 'restore') i.deletedAt = null;
       else if (action === 'status') { check(['unread','reviewing','done'].includes(status) && i.deletedAt === null, '상태를 변경할 수 없습니다.'); i.status = status; i.completedAt=status==='done'?(i.completedAt||now):null; }
+      else if (action === 'code') { check(ids.length === 1 && typeof note === 'string' && note.length <= 100, '품번을 확인하세요.'); i.codeManual = note.trim() || null; }
       else if (action === 'edit') { check(ids.length === 1 && typeof note === 'string' && note.length <= 100000 && Array.isArray(tags) && tags.length <= 100 && tags.every(t => typeof t === 'string' && t.length <= 200), '메모·태그 길이를 확인하세요.'); i.note = note; i.tags = [...new Set(tags)]; }
       else throw new Error('지원하지 않는 작업입니다.');
       i.updatedAt = now;

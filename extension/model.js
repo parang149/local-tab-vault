@@ -16,8 +16,8 @@ export const isSupjav = i => i.tags.includes('supjav') || i.url.startsWith('http
 export function queryItems(items, options = {}) {
   const q = String(options.search || '').toLocaleLowerCase();
   const counts = { total: 0, unread: 0, reviewing: 0, done: 0, trash: 0 };
-  for (const i of items) { if (i.deletedAt !== null) counts.trash++; else { counts.total++; counts[i.status]++; } }
-  const filtered = items.filter(i => (options.trash ? i.deletedAt !== null : i.deletedAt === null) && (options.source !== 'supjav' || isSupjav(i)) && (!options.status || (options.status==='active' ? i.status!=='done' : i.status === options.status)) && (!q || `${i.title}\n${i.url}\n${i.note}\n${i.tags.join(' ')}`.toLocaleLowerCase().includes(q)));
+  for (const i of items) { if (i.recordOnly && options.source !== 'record') continue; if (i.deletedAt !== null) counts.trash++; else { counts.total++; counts[i.status]++; } }
+  const filtered = items.filter(i => (options.trash ? i.deletedAt !== null : i.deletedAt === null) && (options.source !== 'supjav' || isSupjav(i)) && (options.source !== 'nocode' || !i.codeKey) && (options.source === 'record' || !i.recordOnly) && (!options.status || (options.status==='active' ? i.status!=='done' : i.status === options.status)) && (!q || `${i.title}\n${i.url}\n${i.note}\n${i.tags.join(' ')}\n${i.code || ''}`.toLocaleLowerCase().includes(q)));
   const compare = options.sort === 'domain' ? (a,b) => domain(a.url).localeCompare(domain(b.url), 'ko') : options.sort === 'title' ? (a,b) => a.title.localeCompare(b.title, 'ko') : options.sort === 'recent' ? (a,b) => (b.lastViewedAt || 0) - (a.lastViewedAt || 0) : options.sort === 'newest' ? (a,b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id) : (a,b) => a.createdAt - b.createdAt;
   filtered.sort((a,b) => compare(a,b) || a.createdAt - b.createdAt || a.id.localeCompare(b.id));
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));

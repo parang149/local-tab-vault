@@ -351,3 +351,23 @@ test('tidy closes only tabs already in the vault (not trash), saves nothing new,
   await assert.rejects(f.service.tidyClose({id:plan.id}),/만료/);
   assert.ok(saved.verified);
 });
+
+test('vault work mode: plain close keeps unread and skips, nyaa close completes',async()=>{
+  const f=fixture(3);await f.service.ready;await save(f);
+  const st=await f.service.setAutoSync({enabled:true,mode:'vault'});
+  assert.equal(st.mode,'vault');
+  const status=async url=>(await f.db.snapshot()).items.find(i=>i.url===url).status;
+  // 그냥 닫기 → 미완료 그대로, 건너뛰고 다음
+  const a=f.tabs.find(t=>t.id===1); const urlA=a.url;
+  f.tabs.splice(f.tabs.indexOf(a),1);
+  const r1=await f.service.onTabRemoved(1,{});
+  assert.equal(r1.changed,0); assert.notEqual(await status(urlA),'done'); assert.ok(f.service.skipped.size===1);
+  // nyaa 탭 닫기/다운로드 → 완료
+  const b=f.tabs.find(t=>t.id===2); const urlB=b.url;
+  await f.service.closeDone(2);
+  const r2=await f.service.onTabRemoved(2,{});
+  assert.equal(r2.changed,1); assert.equal(await status(urlB),'done');
+  // 탭 작업이면 downloaded는 아무것도 안 함
+  await f.service.setAutoSync({enabled:true,mode:'tab'});
+  assert.equal(await f.service.downloaded(3),false);
+});
